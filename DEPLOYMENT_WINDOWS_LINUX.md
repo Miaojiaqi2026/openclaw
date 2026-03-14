@@ -1,671 +1,380 @@
-# OpenClaw Windows 与 Linux 部署说明（小白可执行版）
+﻿# OpenClaw Windows 与 Linux 部署说明（按实测流程修订）
 
-本文档目标：让非专业人员也可以按步骤完成 OpenClaw 的部署、启动、验证与日常维护。
+本文档基于 2026-03-13 在 Windows 环境的实测成功流程整理，重点保证“能编译、能打包、能部署、能启动、能访问”。
 
 适用范围：
-- Windows 10/11
-- Linux（Ubuntu 22.04/24.04、Debian 12、CentOS Stream 9 等）
+- Windows 10/11（本次已实测）
+- Linux（按同逻辑部署）
 
 ---
 
-## 1. 本次已生成的发布文件
+## 1. 本次实测结果摘要
 
-在项目根目录下，已生成以下发布物：
-
-- release/openclaw-2026.3.11-windows.zip
-- release/openclaw-2026.3.11-linux.tar.gz
-- release/openclaw-2026.3.11/（解包目录，含 dist 和入口文件）
-
-你可以直接把 zip 或 tar.gz 复制到目标服务器进行部署。
+- 源码目录：`D:\OpenClaw\Develop\openclaw`
+- 部署目录：`D:\OpenClaw\deploy`
+- 发布包：`D:\OpenClaw\deploy\openclaw-2026.3.13.tgz`
+- 运行目录：`D:\OpenClaw\deploy\openclaw-runtime-next\package`
+- 访问地址：`http://127.0.0.1:18789`
+- 验证结果：HTTP 200，页面可打开
 
 ---
 
-## 2. 部署前准备（两端通用）
+## 2. 前置条件
 
-### 2.1 机器要求
+### 2.1 环境要求
 
-- CPU：2 核及以上
-- 内存：4 GB 及以上（推荐 8 GB）
-- 磁盘：可用空间 2 GB 以上
-- 网络：可访问你要对接的消息渠道、模型服务和数据库
+- Node.js >= 22（建议 22 或更高）
+- pnpm（建议与项目锁文件一致版本）
+- PowerShell（Windows）
+- tar（Windows 11/Server 一般内置 bsdtar）
 
-### 2.2 必备软件
+检查命令：
 
-- Node.js 22 或更高版本（必须）
-- npm（随 Node.js 安装）
-- Git（建议安装，便于后续升级与排障）
-- curl（Linux/WSL2 需要）
-- tar（Linux/WSL2 需要）
-- Windows 端建议：7-Zip（解压发布包）、NSSM（可选，用于服务化自启）
-
-检查版本命令：
-
-```bash
+```powershell
 node -v
-npm -v
-git --version
-```
-
-如果 `node -v` 低于 22，请先升级 Node。
-
----
-
-### 2.3 部署前权限设置（重要）
-
-#### Windows（PowerShell 执行策略）
-
-如果执行脚本时报 `running scripts is disabled` 或 `ExecutionPolicy Restricted`：
-
-1. 以管理员身份打开 PowerShell。
-2. 查看当前策略：
-
-```powershell
-Get-ExecutionPolicy
-```
-
-3. 建议仅设置当前用户范围：
-
-```powershell
-Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
-```
-
-4. 再次验证：
-
-```powershell
-Get-ExecutionPolicy
-```
-
-#### Linux / WSL2（sudo 与目录权限）
-
-- 需要具备 `sudo` 权限。
-- 建议部署目录属于运行用户，避免反复用 root 运行。
-
-示例：
-
-```bash
-sudo mkdir -p /opt/openclaw
-sudo chown -R $USER:$USER /opt/openclaw
+pnpm -v
 ```
 
 ---
 
-### 2.4 在线 Qwen 大模型配置（部署前建议完成）
+## 3. Windows 完整操作流程（已验证可执行）
 
-你使用在线 Qwen，建议走官方 onboarding 命令写入配置，不要手工写不兼容键。
+### 3.1 从源码编译
 
-#### 方案 A（推荐）：Qwen OAuth
+在 `D:\OpenClaw\Develop\openclaw` 执行：
 
-```bash
-node ./openclaw.mjs onboard --auth-choice qwen-portal
-```
-
-按界面提示完成授权即可。
-
-#### 方案 B：Qwen API Key（OpenAI 兼容端点）
-
-非交互示例（DashScope OpenAI 兼容）：
-
-```bash
-node ./openclaw.mjs onboard --non-interactive --auth-choice custom-api-key --custom-base-url "https://dashscope.aliyuncs.com/compatible-mode/v1" --custom-model-id "qwen-plus" --custom-api-key "<你的Qwen_API_Key>"
+```powershell
+pnpm install
+pnpm ui:build
+pnpm build:docker
 ```
 
 说明：
-- 推荐通过 `onboard` 写入，避免出现 `Unrecognized key`。
-- 密钥不要直接写入 Git 仓库，优先环境变量或密钥管理系统。
+- Windows 原生环境下，`pnpm build` 可能因 `bash scripts/bundle-a2ui.sh` 失败。
+- 本次成功流程使用 `pnpm build:docker` 生成可运行 `dist` 产物。
 
-配置完成后建议验证：
+### 3.2 生成发布包
 
-```bash
-node ./openclaw.mjs config validate
-node ./openclaw.mjs models status
-```
-
----
-
-### 2.5 网络与防火墙权限
-
-如果你要从其他机器访问 OpenClaw（不仅仅本机）：
-
-- `gateway.bind` 必须为 `lan` 或 `custom`。
-- 主机防火墙需要放行服务端口（默认 `18789`）。
-
-Windows 放行示例（管理员 PowerShell）：
+在 `D:\OpenClaw\Develop\openclaw` 执行：
 
 ```powershell
-netsh advfirewall firewall add rule name="OpenClaw 18789" dir=in action=allow protocol=TCP localport=18789
-```
-
-Ubuntu UFW 放行示例：
-
-```bash
-sudo ufw allow 18789/tcp
-sudo ufw status
-```
-
----
-
-## 3. Windows 部署步骤
-
-## 3.1 上传并解压发布包
-
-1. 将 `openclaw-2026.3.11-windows.zip` 复制到目标机器，例如 `D:\deploy`。
-2. 右键解压后得到目录：`D:\deploy\openclaw-2026.3.11`。
-
-## 3.2 安装运行依赖
-
-打开 PowerShell（管理员或普通用户均可）：
-
-```powershell
-cd D:\deploy\openclaw-2026.3.11
-npm install --omit=dev
+pnpm pack --pack-destination D:\OpenClaw\deploy --config.ignore-scripts=true
 ```
 
 说明：
-- 该命令只安装运行时依赖，不安装开发依赖。
+- 使用 `--config.ignore-scripts=true`，避免 Windows 下执行 `prepack` 时触发 `bash` 依赖报错。
 
-## 3.3 首次配置
-
-建议先配置基础项（按你的实际环境调整）：
+### 3.3 解压并部署到目标目录
 
 ```powershell
-cd D:\deploy\openclaw-2026.3.11
-node .\openclaw.mjs config set gateway.mode local
-node .\openclaw.mjs config set gateway.bind lan
-node .\openclaw.mjs config set gateway.port 18789
+$deploy = "D:\OpenClaw\deploy"
+$tgz = Join-Path $deploy "openclaw-2026.3.13.tgz"
+$runtime = Join-Path $deploy "openclaw-runtime-next"
+
+if (Test-Path $runtime) { Remove-Item -Recurse -Force $runtime }
+New-Item -ItemType Directory -Path $runtime | Out-Null
+tar -xf $tgz -C $runtime
+
+Set-Location (Join-Path $runtime "package")
+pnpm install --prod --ignore-scripts
 ```
 
-如果你已准备好渠道 Token、模型密钥等，可继续执行：
+### 3.4 同步 UI 资源（关键）
+
+若未同步 `dist/control-ui`，启动后访问会报：
+`Control UI assets not found`。
+
+执行以下命令：
 
 ```powershell
-node .\openclaw.mjs config set <配置键> <配置值>
+$src = "D:\OpenClaw\Develop\openclaw\dist\control-ui"
+$dst = "D:\OpenClaw\deploy\openclaw-runtime-next\package\dist\control-ui"
+
+if (Test-Path $dst) { Remove-Item -Recurse -Force $dst }
+New-Item -ItemType Directory -Path $dst | Out-Null
+Copy-Item -Recurse -Force (Join-Path $src "*") $dst
 ```
 
-## 3.4 启动服务
-
-前台启动（用于首次验证）：
+### 3.5 启动服务
 
 ```powershell
-cd D:\deploy\openclaw-2026.3.11
-node .\openclaw.mjs gateway run --port 18789 --force
+Set-Location "D:\OpenClaw\deploy\openclaw-runtime-next\package"
+node openclaw.mjs gateway --port 18789 --verbose
 ```
 
-看到服务启动日志后，不要关闭该窗口。
-
-## 3.5 健康检查
-
-另开一个 PowerShell 窗口执行：
+如果提示端口被占用或已有实例：
 
 ```powershell
-cd D:\deploy\openclaw-2026.3.11
-node .\openclaw.mjs channels status --probe
+node openclaw.mjs gateway stop
+# 若仍未释放，按实际 PID 强制结束
+Stop-Process -Id <PID> -Force
 ```
 
-检查监听端口：
+然后再重新启动。
+
+### 3.6 验证访问
 
 ```powershell
-netstat -ano | findstr 18789
+Invoke-WebRequest -Uri "http://127.0.0.1:18789" -UseBasicParsing
 ```
 
-如果看到 `LISTENING`，表示监听正常。
+成功标准：
+- HTTP 状态码 200
+- 返回 HTML，标题包含 `OpenClaw Control`
 
-## 3.6 设置开机自启（推荐）
+浏览器访问：
 
-Windows 没有原生 systemd，推荐使用 NSSM（Non-Sucking Service Manager）：
+```text
+http://127.0.0.1:18789
+```
+### 3.7 WEB端操作使用
 
-1. 下载 NSSM 并解压。
-2. 以管理员 PowerShell 执行（路径按实际修改）：
+你需要先在你的主机后台获取这个 Token（令牌），填入页面后才能连接并进入真正的控制/聊天界面。
 
-```powershell
-nssm install OpenClawGateway "C:\Program Files\nodejs\node.exe" "D:\deploy\openclaw-2026.3.11\openclaw.mjs gateway run --port 18789 --force"
-nssm set OpenClawGateway AppDirectory "D:\deploy\openclaw-2026.3.11"
-nssm start OpenClawGateway
+请按照以下步骤操作（参考你截图下方的“How to connect”提示）：
+
+#### 第一步：在终端/命令行获取 Token
+
+1. 打开你电脑上的终端（Terminal）或命令行工具（比如 cmd、PowerShell 或 macOS/Linux 的 Terminal）。
+2. 确保你的 OpenClaw 网关已经在运行。如果没有，请运行：
+`openclaw gateway run`
+3. 接着，运行以下命令来获取带 Token 的控制台地址：
+`openclaw dashboard --no-open`
+4. 运行后，终端会输出一段信息，其中会包含一长串字符的 **Token**（或者是带有 `?token=...` 的网址）。请将这段 Token 复制下来。
+
+#### 第二步：在页面中连接
+
+1. 回到你截图的这个浏览器页面。
+2. 将刚刚复制的 Token 粘贴到 **Gateway Token** 这个输入框中。
+3. 点击红色的 **Connect** 按钮。
+
+#### 第三步：开始交互
+
+连接成功后，这个报错页面就会消失，你将进入 OpenClaw 的主控制台（Control UI）。在这个控制台界面里，你就能看到输入框，可以开始和它进行“聊天”或下达指令了。
+
+你现在能在终端里找到那个 `openclaw dashboard --no-open` 命令输出的 Token 吗？如果找不到，可以把终端的输出内容截图发给我帮你看看。
+---
+
+## 4. Linux 完整流程（与 Windows 同逻辑）
+
+以下为等价流程，路径示例为 `/opt/openclaw`：
+
+```bash
+cd /opt/openclaw/openclaw
+pnpm install
+pnpm ui:build
+pnpm build:docker
+pnpm pack --pack-destination /opt/openclaw/deploy --config.ignore-scripts=true
+
+mkdir -p /opt/openclaw/deploy/openclaw-runtime-next
+tar -xf /opt/openclaw/deploy/openclaw-2026.3.13.tgz -C /opt/openclaw/deploy/openclaw-runtime-next
+
+cd /opt/openclaw/deploy/openclaw-runtime-next/package
+pnpm install --prod --ignore-scripts
+
+mkdir -p dist/control-ui
+cp -r /opt/openclaw/openclaw/dist/control-ui/* dist/control-ui/
+
+node openclaw.mjs gateway --port 18789 --verbose
 ```
 
-3. 验证服务状态：
+验证：
 
-```powershell
-Get-Service OpenClawGateway
+```bash
+curl -i http://127.0.0.1:18789
 ```
 
 ---
 
-## 4. Linux 部署步骤
+## 5. 常见问题与修复
 
-## 4.1 上传并解压发布包
+### 5.1 `bash 不是内部或外部命令`
 
-```bash
-mkdir -p /opt/openclaw
-cp openclaw-2026.3.11-linux.tar.gz /opt/openclaw/
-cd /opt/openclaw
-tar -xzf openclaw-2026.3.11-linux.tar.gz
-cd openclaw-2026.3.11
-```
-
-## 4.2 安装运行依赖
-
-```bash
-cd /opt/openclaw/openclaw-2026.3.11
-npm install --omit=dev
-```
-
-## 4.3 首次配置
-
-```bash
-cd /opt/openclaw/openclaw-2026.3.11
-node ./openclaw.mjs config set gateway.mode local
-node ./openclaw.mjs config set gateway.bind lan
-node ./openclaw.mjs config set gateway.port 18789
-```
-
-按需继续写入渠道、模型、数据库等配置：
-
-```bash
-node ./openclaw.mjs config set <配置键> <配置值>
-```
-
-## 4.4 前台启动验证
-
-```bash
-cd /opt/openclaw/openclaw-2026.3.11
-node ./openclaw.mjs gateway run --port 18789 --force
-```
-
-另开终端执行探测：
-
-```bash
-cd /opt/openclaw/openclaw-2026.3.11
-node ./openclaw.mjs channels status --probe
-ss -ltnp | grep 18789
-```
-
-## 4.5 配置 systemd 开机自启（推荐）
-
-创建服务文件：
-
-```bash
-sudo tee /etc/systemd/system/openclaw-gateway.service > /dev/null <<'EOF'
-[Unit]
-Description=OpenClaw Gateway
-After=network.target
-
-[Service]
-Type=simple
-WorkingDirectory=/opt/openclaw/openclaw-2026.3.11
-ExecStart=/usr/bin/node /opt/openclaw/openclaw-2026.3.11/openclaw.mjs gateway run --port 18789 --force
-Restart=always
-RestartSec=5
-User=root
-Environment=NODE_ENV=production
-
-[Install]
-WantedBy=multi-user.target
-EOF
-```
-
-生效并启动：
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable openclaw-gateway
-sudo systemctl start openclaw-gateway
-```
-
-查看状态与日志：
-
-```bash
-sudo systemctl status openclaw-gateway
-sudo journalctl -u openclaw-gateway -f
-```
-
----
-
-## 5. Windows WSL2 部署方案
-
-适用场景：你使用 Windows 主机，但希望在 Linux 环境中运行 OpenClaw。
-
-## 5.1 安装并准备 WSL2
-
-下面分 Win11 和 Win10 两种情况说明。
-
-### 5.1.1 Win11 启用 WSL2（推荐）
-
-前置检查：
-- Windows 11 建议升级到最新补丁。
-- BIOS/UEFI 中开启虚拟化（Intel VT-x / AMD-V）。
-
-步骤 1：以管理员身份打开 PowerShell。
-
-步骤 2：执行一键安装命令：
-
-```powershell
-wsl --install -d Ubuntu-24.04
-```
-
-步骤 3：按提示重启 Windows。
-
-步骤 4：重启后打开 Ubuntu，首次初始化 Linux 用户名与密码。
-
-步骤 5：确认安装结果：
-
-```powershell
-wsl --status
-wsl -l -v
-```
-
-检查点：
-- 默认版本为 2。
-- `Ubuntu-24.04` 的 `VERSION` 为 `2`。
-
-如果不是 2，执行：
-
-```powershell
-wsl --set-default-version 2
-wsl --set-version Ubuntu-24.04 2
-```
-
-### 5.1.2 Win10 启用 WSL2（详细）
-
-Win10 对版本要求更严格，建议满足以下条件：
-- Windows 10 x64，版本 2004+（内部版本 19041+）。
-- BIOS/UEFI 已开启虚拟化。
-
-先检查系统版本（任意一种方式）：
-
-```powershell
-winver
-```
-
-或：
-
-```powershell
-systeminfo | findstr /B /C:"OS Name" /C:"OS Version"
-```
-
-#### 方式 A：命令行启用（推荐）
-
-以管理员 PowerShell 执行：
-
-```powershell
-dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart
-dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart
-```
-
-然后重启系统。
-
-重启后执行：
-
-```powershell
-wsl --set-default-version 2
-wsl --install -d Ubuntu-24.04
-```
-
-若 `wsl --install` 在旧版 Win10 不可用，则改用：
-
-```powershell
-wsl --list --online
-wsl --install -d Ubuntu
-```
-
-若仍不可用，可从 Microsoft Store 手动安装 Ubuntu（例如 Ubuntu 24.04 LTS），安装完成后再执行：
-
-```powershell
-wsl --set-version Ubuntu 2
-```
-
-#### 方式 B：图形界面启用
-
-1. 打开“控制面板 -> 程序 -> 启用或关闭 Windows 功能”。
-2. 勾选：
-	- “适用于 Linux 的 Windows 子系统”
-	- “虚拟机平台”
-3. 点击确定并重启系统。
-4. 重启后安装 Ubuntu（Store 或命令行），并设置为 WSL2。
-
-### 5.1.3 WSL2 启用后的统一验证
-
-```powershell
-wsl --status
-wsl -l -v
-```
-
-在 Ubuntu 终端里验证：
-
-```bash
-uname -a
-cat /etc/os-release
-```
-
-预期：
-- 能看到 Linux 内核信息。
-- 发行版正常显示 Ubuntu。
-
-### 5.1.4 常见失败点（先查这 4 项）
-
-1. 虚拟化未开启：任务管理器 -> 性能 -> CPU，检查“虚拟化: 已启用”。
-2. Windows 功能没开全：必须同时开启 WSL 和 Virtual Machine Platform。
-3. 系统版本过低：Win10 太旧版本不支持完整 WSL2 功能。
-4. 公司安全策略限制虚拟化：联系 IT 放开 Hyper-V/虚拟化策略。
-
-## 5.2 在 WSL2 中安装 Node.js 22+
-
-进入 Ubuntu（WSL）终端执行：
-
-```bash
-sudo apt update
-sudo apt install -y curl ca-certificates
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-sudo apt install -y nodejs
-node -v
-npm -v
-```
-
-## 5.3 将发布包复制到 WSL2 并解压
-
-建议将程序放到 WSL 的 Linux 文件系统目录（性能更稳定），不要长期运行在 `/mnt/c` 下。
-
-```bash
-mkdir -p ~/deploy
-cp /mnt/c/path/to/openclaw-2026.3.11-linux.tar.gz ~/deploy/
-cd ~/deploy
-tar -xzf openclaw-2026.3.11-linux.tar.gz
-cd openclaw-2026.3.11
-```
-
-## 5.4 安装依赖并配置
-
-```bash
-cd ~/deploy/openclaw-2026.3.11
-npm install --omit=dev
-node ./openclaw.mjs config set gateway.mode local
-node ./openclaw.mjs config set gateway.bind lan
-node ./openclaw.mjs config set gateway.port 18789
-```
-
-## 5.5 启动与验证
-
-前台启动：
-
-```bash
-cd ~/deploy/openclaw-2026.3.11
-node ./openclaw.mjs gateway run --port 18789 --force
-```
-
-WSL2 内验证：
-
-```bash
-node ./openclaw.mjs channels status --probe
-ss -ltnp | grep 18789
-```
-
-Windows 主机访问验证：
-
-```powershell
-curl http://localhost:18789
-```
-
-说明：默认情况下，WSL2 监听端口可通过 Windows 的 `localhost` 直接访问。
-
-## 5.6 WSL2 自启动建议
-
-方案 A（推荐，简单）：在 Windows 任务计划程序中创建“开机触发”任务，执行：
-
-```powershell
-wsl -d Ubuntu-24.04 --cd /home/<你的用户名>/deploy/openclaw-2026.3.11 -- bash -lc "nohup node ./openclaw.mjs gateway run --port 18789 --force > ~/openclaw-gateway.log 2>&1 &"
-```
-
-方案 B（进阶）：在 WSL 内启用 systemd 后，按 Linux 章节方式配置服务。
-
----
-
-## 6. 升级流程（Windows/Linux/WSL2 通用）
-
-1. 备份配置文件与凭据目录。
-2. 停止现有服务。
-3. 上传新版本发布包并解压到新目录（例如 `openclaw-2026.3.12`）。
-4. 在新目录执行：
-
-```bash
-npm install --omit=dev
-```
-
-5. 将旧版本配置迁移到新版本。
-6. 启动新版本并验证。
-7. 验证通过后，再删除旧版本目录。
-
----
-
-## 7. 常见问题排查
-
-## 7.1 提示 node: command not found
-
-原因：Node 未安装或环境变量未生效。
-处理：
-- 重新安装 Node.js 22+
-- 重开终端
-- 再执行 `node -v`
-
-## 7.2 端口被占用
+原因：Windows 原生环境执行到 bash 脚本。
 
 处理：
-- 改端口启动，例如 `--port 18800`
-- 或停止占用进程后重启 OpenClaw
+- 编译使用 `pnpm build:docker`
+- 打包使用 `pnpm pack --config.ignore-scripts=true`
 
-Windows 查占用：
+### 5.2 `openclaw: missing dist/entry.(m)js`
+
+原因：构建产物不完整。
+
+处理：
+- 在源码目录重新执行：`pnpm build:docker`
+- 重新打包、解压部署
+
+### 5.3 `Control UI assets not found`
+
+原因：部署包内缺少 `dist/control-ui`。
+
+处理：
+- 执行 `pnpm ui:build`
+- 将源码 `dist/control-ui` 复制到运行目录对应位置
+
+### 5.4 `gateway already running` / `Port 18789 is already in use`
+
+处理：
+- 先执行：`node openclaw.mjs gateway stop`
+- 若仍占用，结束占用端口进程后再启动
+
+---
+
+## 6. 日常启动/停止命令（Windows）
+
+启动：
 
 ```powershell
-netstat -ano | findstr 18789
+Set-Location "D:\OpenClaw\deploy\openclaw-runtime-next\package"
+node openclaw.mjs gateway --port 18789 --verbose
 ```
 
-Linux 查占用：
-
-```bash
-ss -ltnp | grep 18789
-```
-
-## 7.3 渠道状态异常
-
-执行：
-
-```bash
-node ./openclaw.mjs channels status --probe
-```
-
-通常是 Token、密钥、网络白名单、代理配置导致。
-
-## 7.4 Config validation failed: gateway.bind host aliases are legacy
-
-原因：新版本 `gateway.bind` 只接受模式值，不再接受 `0.0.0.0`、`localhost` 等旧别名。
-
-正确写法：
-
-```bash
-node ./openclaw.mjs config set gateway.bind lan
-```
-
-可选值：`auto`、`lan`、`loopback`、`custom`、`tailnet`。
-
-## 7.5 Config validation failed: Unrecognized key "moonshot"
-
-原因：顶层 `moonshot` 已不是合法配置路径。
-
-正确方式：
-- 使用 `onboard --auth-choice ...` 写入提供商配置（推荐）。
-- 或写入合法路径 `models.providers.<providerId>.apiKey`。
-
-示例：
-
-```bash
-node ./openclaw.mjs onboard --non-interactive --auth-choice moonshot-api-key --moonshot-api-key "<你的key>"
-```
-
-## 7.6 WSL2 中 Windows 能访问但局域网无法访问
-
-原因：WSL2 默认是 NAT 网络，`localhost` 转发到 Windows 主机可用，但外部设备访问通常需要额外端口映射。
-
-处理建议：
-- 仅本机使用：继续使用 `http://localhost:18789`。
-- 需要局域网访问：在 Windows 上额外配置端口转发和防火墙放行。
-
----
-
-## 8. 回滚方案（强烈建议保留）
-
-1. 保留至少一个旧版本目录（例如 `openclaw-2026.3.10`）。
-2. 新版本异常时，停止新版本服务。
-3. 将服务工作目录改回旧版本并重启。
-4. 业务恢复后，再排查新版本问题。
-
----
-
-## 9. 运维建议（非专业也适用）
-
-- 每次变更只改一个项目，改完立即验证。
-- 配置和凭据先备份再调整。
-- 建议记录一份“部署日志”：时间、改动项、结果、回滚点。
-- 生产环境优先使用 systemd/NSSM，避免手工窗口常驻。
-
----
-
-## 10. 一页式快速命令（可打印）
-
-Windows：
+停止：
 
 ```powershell
-cd D:\deploy\openclaw-2026.3.11
-npm install --omit=dev
-node .\openclaw.mjs config set gateway.mode local
-node .\openclaw.mjs config set gateway.bind lan
-node .\openclaw.mjs config set gateway.port 18789
-node .\openclaw.mjs gateway run --port 18789 --force
-node .\openclaw.mjs channels status --probe
+Set-Location "D:\OpenClaw\deploy\openclaw-runtime-next\package"
+node openclaw.mjs gateway stop
 ```
 
-Linux：
+检查端口：
+
+```powershell
+Get-NetTCPConnection -LocalPort 18789 -State Listen
+```
+
+---
+
+## 7. Skills 下载与更新（ClawHub）
+
+OpenClaw 的 skills 推荐通过 ClawHub 管理。
+
+### 7.1 安装 ClawHub CLI
+
+任选一种：
 
 ```bash
-cd /opt/openclaw/openclaw-2026.3.11
-npm install --omit=dev
-node ./openclaw.mjs config set gateway.mode local
-node ./openclaw.mjs config set gateway.bind lan
-node ./openclaw.mjs config set gateway.port 18789
-node ./openclaw.mjs gateway run --port 18789 --force
-node ./openclaw.mjs channels status --probe
+npm i -g clawhub
 ```
-
-WSL2（Ubuntu）：
 
 ```bash
-cd ~/deploy/openclaw-2026.3.11
-npm install --omit=dev
-node ./openclaw.mjs config set gateway.mode local
-node ./openclaw.mjs config set gateway.bind lan
-node ./openclaw.mjs config set gateway.port 18789
-node ./openclaw.mjs gateway run --port 18789 --force
-node ./openclaw.mjs channels status --probe
+pnpm add -g clawhub
 ```
 
-Qwen（在线 API）快速配置：
+### 7.2 常用命令
 
 ```bash
-node ./openclaw.mjs onboard --non-interactive --auth-choice custom-api-key --custom-base-url "https://dashscope.aliyuncs.com/compatible-mode/v1" --custom-model-id "qwen-plus" --custom-api-key "<你的Qwen_API_Key>"
+clawhub search "calendar"
+clawhub install <skill-slug>
+clawhub update --all
 ```
+
+### 7.3 Skills 存储位置与持久化说明
+
+- 本地工作目录通常为 `<当前目录>/skills`，并记录在 `.clawhub/lock.json`。
+- OpenClaw 默认还会使用用户目录 `~/.openclaw/workspace/skills`（Windows 对应 `%USERPROFILE%\\.openclaw\\workspace\\skills`）。
+- 本文档配套批处理在“发布更新”时会保留以下目录中的相关数据（若存在）：
+	- `workspace`
+	- `skills`
+	- `.clawhub`
+	- `extensions\\managed`
+	- `extensions\\custom`
+	- `data` / `storage` / `user-data`
+- 用户目录 `%USERPROFILE%\\.openclaw` 不会被清理。
+
+---
+
+## 8. 一键批处理（菜单式）
+
+项目根目录已提供：`deploy_menu.bat`
+
+运行方式：
+
+```powershell
+cd D:\OpenClaw\Develop\openclaw
+deploy_menu.bat
+```
+
+菜单功能：
+- `1` 编译项目（`pnpm install` + `pnpm ui:build` + `pnpm build:docker`）
+- `2` 生成发布包并更新发布目录（自动保留记忆/skills/MCP 插件相关数据）
+- `3` 重启服务并连通性检查
+- `4` 全流程（1+2+3）
+- `5` Skills 搜索/安装/更新
+
+脚本特性：
+- 每一步都有进度提示，失败会中断并提示原因。
+- 发布更新前自动备份持久化目录，更新后自动恢复。
+- 自动同步 `dist/control-ui`，避免 `Control UI assets not found`。
+- 重启服务时会先尝试优雅停止，再清理端口占用。
+
+---
+
+## 9. 安全建议
+
+- 默认建议仅本机访问：优先使用 `127.0.0.1`。
+- 若绑定 `0.0.0.0`（LAN 可访问），务必配置认证并控制防火墙策略。
+- 不要把模型密钥和渠道 Token 明文提交到仓库。
+
+---
+
+## 10. Qwen 接入详细步骤（Windows 实测可用路径）
+
+本项目已包含 Qwen 门户认证扩展：`extensions/qwen-portal-auth`。
+
+推荐做法：先在网页中完成网关连接，再在模型配置中切到 Qwen。
+
+### 10.1 启动网关
+
+```powershell
+Set-Location "D:\OpenClaw\deploy\openclaw-runtime-next\package"
+node openclaw.mjs gateway --port 18789 --verbose
+```
+
+### 10.2 打开控制台并连接网关
+
+浏览器访问：`http://127.0.0.1:18789`
+
+如果页面要求 Token：
+
+```powershell
+openclaw dashboard --no-open
+```
+
+复制输出中的 token（或 `?token=...` 链接）填入页面连接。
+
+### 10.3 在 OpenClaw 中切换 Qwen 模型
+
+在控制台设置里将模型提供方切换到 Qwen（或 OpenAI 兼容端点接入 Qwen 服务），常见参数：
+
+- Base URL：你的 Qwen 兼容接口地址
+- API Key：Qwen 平台密钥
+- Model：例如 `qwen-plus`、`qwen-turbo`（以你账号可用模型为准）
+
+配置完成后保存，并发起一次简单测试对话（例如“你好，请回复 ok”）。
+
+### 10.4 终端侧快速自检
+
+```powershell
+Get-NetTCPConnection -LocalPort 18789 -State Listen
+Invoke-WebRequest -Uri "http://127.0.0.1:18789" -UseBasicParsing
+```
+
+成功标准：
+
+- 18789 端口有监听
+- HTTP 返回 200
+- 控制台内模型回复正常
+
+### 10.5 常见问题
+
+- 连接后仍无法调用模型：
+	- 检查 Base URL 是否为 Qwen 兼容接口地址（不要填错控制台页面地址）。
+	- 检查 API Key 是否有效、是否有该模型调用权限。
+
+- 网关日志提示模型请求失败：
+	- 先用最小模型名（如 `qwen-turbo`）测试。
+	- 检查公司网络代理、防火墙或 TLS 拦截。
+
+- 页面显示 503：
+	- 先确认 `dist/entry.js` 与 `dist/control-ui/index.html` 在运行目录存在。
+	- 再执行发布流程第 2 步（菜单 `2`）并重启（菜单 `3`）。
