@@ -1,4 +1,4 @@
-import { resolveOutboundSendDep } from "../../infra/outbound/deliver.js";
+import { resolveOutboundSendDep } from "../../infra/outbound/send-deps.js";
 import type { PluginRuntimeChannel } from "../../plugins/runtime/types-channel.js";
 import { escapeRegExp } from "../../utils.js";
 import { resolveWhatsAppOutboundTarget } from "../../whatsapp/resolve-outbound-target.js";
@@ -18,6 +18,10 @@ export function resolveWhatsAppMentionStripPatterns(ctx: { To?: string | null })
   }
   const escaped = escapeRegExp(selfE164);
   return [escaped, `@${escaped}`];
+}
+
+export function resolveWhatsAppMentionStripRegexes(ctx: { To?: string | null }): RegExp[] {
+  return resolveWhatsAppMentionStripPatterns(ctx).map((pattern) => new RegExp(pattern, "g"));
 }
 
 type WhatsAppChunker = NonNullable<ChannelOutboundAdapter["chunker"]>;
